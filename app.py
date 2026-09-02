@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide",
 )
 
-API_URL = st.secrets.toml["API_URL"]
+API_URL = st.secrets.get("API_URL", "http://localhost:8000")
 
 # GRAZPEDWRI-DX Class Label Map
 CLASS_NAMES = {
@@ -214,7 +214,7 @@ if uploaded_file is not None:
                         data = {
                             "task_type": "segmentation",
                             "model_choice": "yolo",
-                            "conf_threshold": conf_threshold,
+                            "conf_threshold": str(conf_threshold),
                         }
 
                         try:
