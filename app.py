@@ -6,9 +6,7 @@ from PIL import Image
 import io
 
 # --- CONFIGURATION ---
-API_URL = st.secrets.get(
-    "API_URL",
-    os.getenv("API_URL", "http://localhost:8000/analyze")
+API_URL = st.secrets["API_URL"]
 )
 
 st.set_page_config(
