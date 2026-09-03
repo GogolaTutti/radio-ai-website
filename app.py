@@ -1,13 +1,12 @@
 import base64
+import io
 import os
 import requests
 import streamlit as st
 from PIL import Image
-import io
 
 # --- CONFIGURATION ---
-API_URL = st.secrets["API_URL"]
-
+API_URL = st.secrets.get("API_URL", "http://localhost:8000")
 
 st.set_page_config(
     page_title="Radio AI - Medical Image Analysis",
@@ -17,7 +16,7 @@ st.set_page_config(
 
 st.title("🩺 Radio AI: X-Ray Analysis Dashboard")
 st.markdown(
-    "Upload a medical X-ray to run **Classification** (with Grad-CAM heatmaps) or **Segmentation** (YOLO localization)."
+    "Upload a medical X-ray to run **Classification** (with Grad-CAM heatmaps) or **Segmentation** (YOLO localization with Ground Truth comparison)."
 )
 
 # --- SIDEBAR CONTROLS ---
@@ -53,11 +52,24 @@ else:
     )
     target_mode = "fracture_only"  # Default placeholder for API compliance
 
-# --- FILE UPLOAD ---
-st.subheader("1. Upload X-Ray Image")
-uploaded_file = st.file_uploader(
-    "Choose an image file (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"]
-)
+# --- FILE UPLOADS ---
+st.subheader("1. Upload Inputs")
+
+col_u1, col_u2 = st.columns([1, 1])
+
+with col_u1:
+    uploaded_file = st.file_uploader(
+        "Choose an image file (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"]
+    )
+
+gt_file = None
+with col_u2:
+    if task_type == "segmentation":
+        gt_file = st.file_uploader(
+            "Optional: Upload Ground Truth (.txt in YOLO format)",
+            type=["txt"],
+            help="Upload normalized YOLO bounding box annotations (cls x_c y_c w h) to calculate IoU and display comparison overlays.",
+        )
 
 if uploaded_file is not None:
     # Display Original Image Preview
@@ -67,6 +79,8 @@ if uploaded_file is not None:
 
     with col_action:
         st.info(f"**Task:** {task_type.capitalize()} | **Model:** {model_choice.upper()}")
+        if gt_file is not None:
+            st.success(f"📌 Ground Truth Loaded: `{gt_file.name}`")
         run_analysis = st.button("🚀 Run Analysis", type="primary")
 
     if run_analysis:
@@ -74,7 +88,15 @@ if uploaded_file is not None:
             try:
                 # Reset file pointer and build payload
                 uploaded_file.seek(0)
-                files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+                files = {
+                    "file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)
+                }
+
+                # Attach optional ground truth text file for segmentation
+                if task_type == "segmentation" and gt_file is not None:
+                    gt_file.seek(0)
+                    files["gt_file"] = (gt_file.name, gt_file.getvalue(), "text/plain")
+
                 data = {
                     "task_type": task_type,
                     "model_choice": model_choice,
@@ -82,7 +104,7 @@ if uploaded_file is not None:
                 }
 
                 # Send Request to FastAPI Backend
-                response = requests.post(API_URL, files=files, data=data, timeout=60)
+                response = requests.post(f"{API_URL}/analyze", files=files, data=data, timeout=60)
 
                 if response.status_code == 200:
                     result = response.json()
@@ -136,27 +158,52 @@ if uploaded_file is not None:
                         res_col1, res_col2 = st.columns([1, 1])
 
                         with res_col1:
-                            st.markdown("### Detections Summary")
+                            st.markdown("### Detections & Metrics")
                             count = result.get("detections_count", 0)
-                            st.metric(label="Total Regions Detected", value=count)
+                            has_gt = result.get("has_ground_truth", False)
+                            max_iou = result.get("max_iou", 0.0)
+
+                            m_col1, m_col2 = st.columns(2)
+                            with m_col1:
+                                st.metric(label="Detected Regions", value=count)
+                            with m_col2:
+                                if has_gt:
+                                    st.metric(
+                                        label="Max IoU Score",
+                                        value=f"{max_iou:.4f}",
+                                        delta="Match Quality" if max_iou >= 0.5 else "Low Overlap",
+                                        delta_color="normal" if max_iou >= 0.5 else "inverse"
+                                    )
+                                else:
+                                    st.metric(label="Ground Truth", value="None Provided")
 
                             boxes = result.get("detected_boxes", [])
                             if boxes:
-                                st.markdown("**Bounding Box Coordinates & Confidence:**")
+                                st.markdown("**Predicted Bounding Boxes:**")
                                 st.dataframe(boxes, use_container_width=True)
                             else:
                                 st.info("No fracture regions or bounding boxes detected.")
 
-                        with res_col2:
-                            st.markdown("### YOLO Bounding Box Overlay")
-                            seg_b64 = result.get("segmented_image_base64", "")
+                            gt_boxes = result.get("ground_truth_boxes", [])
+                            if gt_boxes:
+                                with st.expander("Show Ground Truth Boxes"):
+                                    st.json(gt_boxes)
 
+                        with res_col2:
+                            st.markdown("### Bounding Box Overlay")
+                            if has_gt:
+                                st.markdown(
+                                    "🟢 **Green:** Ground Truth Annotation &nbsp;&nbsp;|&nbsp;&nbsp; 🔴 **Red:** YOLO Prediction",
+                                    unsafe_allow_html=True,
+                                )
+
+                            seg_b64 = result.get("segmented_image_base64", "")
                             if seg_b64:
                                 img_bytes = base64.b64decode(seg_b64)
                                 segmented_img = Image.open(io.BytesIO(img_bytes))
                                 st.image(
                                     segmented_img,
-                                    caption="YOLO Localized Output",
+                                    caption="Comparative Bounding Box Overlay" if has_gt else "YOLO Detection Overlay",
                                     use_container_width=True,
                                 )
                             else:
