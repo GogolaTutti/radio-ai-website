@@ -6,7 +6,10 @@ from PIL import Image
 import io
 
 # --- CONFIGURATION ---
-API_URL = os.getenv("API_URL", "http://localhost:8000/analyze")
+API_URL = st.secrets.get(
+    "API_URL",
+    os.getenv("API_URL", "http://localhost:8000/analyze")
+)
 
 st.set_page_config(
     page_title="Radio AI - Medical Image Analysis",
